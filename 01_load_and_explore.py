@@ -42,7 +42,7 @@ column_names = [
 # header=None tells pandas "there's no header row in the file, don't treat
 # the first data row as column titles."
 # names=column_names supplies the column titles we just defined above.
-df = pd.read_csv("KDDTrain+.txt", header=None, names=column_names)
+df = pd.read_csv("/Users/rickymartin/Desktop/Personal Project/Anomoly detection/KDDTrain+.txt", header=None, names=column_names)
 
 # ---------------------------------------------------------------------------
 # 3. BASIC SANITY CHECKS
