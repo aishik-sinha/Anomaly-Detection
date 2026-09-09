@@ -77,8 +77,7 @@ print(df["label"].value_counts())
 # categories: "normal" or "attack". This is a common first step - once this
 # works, you can go back and try predicting the specific attack type instead.
 df["binary_label"] = df["label"].apply(lambda x: "normal" if x == "normal" else "attack")
-
-print("\nSimplified binary label distribution:")
+#comment test
 print(df["binary_label"].value_counts())
 
 # ---------------------------------------------------------------------------
