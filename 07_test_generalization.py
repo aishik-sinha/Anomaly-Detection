@@ -83,7 +83,20 @@ print(f"Training on all {len(train_df)} rows from KDDTrain+.txt\n")
 # ---------------------------------------------------------------------------
 # 2. TRAIN THE MODEL
 # ---------------------------------------------------------------------------
-model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+# class_weight='balanced' addresses a real problem we discovered: without
+# it, the model treats every ROW equally during training, so it naturally
+# learns to recognize whatever attack type has the most examples (neptune,
+# 41,214 rows) and barely learns rare ones (spy, 2 rows) at all - even
+# though both are equally "one attack type" conceptually.
+#
+# 'balanced' automatically re-weights each class inversely proportional to
+# how often it appears, so a mistake on a rare class costs the model more
+# during training than a mistake on a common one. This won't fix the
+# "never seen this attack type at all" problem (nothing can fix that
+# without examples), but it should meaningfully help attack types that
+# WERE in training but were just rare.
+model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42,
+                                class_weight="balanced")
 model.fit(X_train_scaled, y_train)
 
 # ---------------------------------------------------------------------------
@@ -133,8 +146,9 @@ print(f"F1 Score:  {f1:.4f}")
 print("Confusion Matrix (rows=actual, cols=predicted, order=[normal, attack]):")
 print(cm)
 
-print("\n(For comparison, our earlier same-file random 80/20 split from file 4")
-print(" scored roughly: Accuracy 0.998, Precision 0.999, Recall 0.997, F1 0.998)")
+print("\n(For comparison, WITHOUT class_weight='balanced', this same KDDTest+.txt")
+print(" evaluation scored: Accuracy 0.7694, Precision 0.9677, Recall 0.6154, F1 0.7524)")
+print(" Watch recall in particular - that's the number most likely to improve.")
 
 # ---------------------------------------------------------------------------
 # 5. HOW MANY ATTACK TYPES IN THE TEST FILE WERE NEVER SEEN IN TRAINING?
