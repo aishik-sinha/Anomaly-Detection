@@ -1,7 +1,9 @@
 """
-STEP 4: Compare Models (Decision Tree vs Random Forest vs Isolation Forest)
+STEP 4: Compare Models + Feature Importance (EXPERIMENT BRANCH)
 -----------------------------------------------------------------------------
-Goal of this file: train two more models and compare all three side by side.
+Goal of this file: train multiple models, compare them, then use the
+Random Forest's own feature importance ranking to see which features
+actually matter - and test a simplified model using only the top ones.
 
 1. Random Forest: instead of one Decision Tree, this trains MANY trees
    (each seeing a slightly different random slice of the data) and has
@@ -16,8 +18,14 @@ Goal of this file: train two more models and compare all three side by side.
    flagged as anomalies. This mimics real-world security work where you
    often don't have labels for brand-new attack types.
 
+3. Feature Importance: after training the Random Forest, we ask it which
+   features it actually relied on most, then rebuild a simplified model
+   using only the top N features and compare performance against the
+   full-feature model.
+
 Run this with: python 04_compare_models.py
 (Make sure KDDTrain+.txt is in the same folder as the previous steps)
+(This version lives on the 'experiment-features' branch)
 """
 
 import pandas as pd
@@ -59,6 +67,7 @@ for col in categorical_columns:
 
 X = df.drop(columns=["binary_label"])
 y = df["binary_label"]
+feature_names = X.columns  # saved before scaling turns X into a plain array - needed later for feature importance
 
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
@@ -116,6 +125,42 @@ rf_pred = rf_model.predict(X_test)
 results.append(evaluate_model("Random Forest", y_test, rf_pred))
 
 # ---------------------------------------------------------------------------
+# 3b. FEATURE IMPORTANCE - ask the Random Forest which features mattered most
+# ---------------------------------------------------------------------------
+# .feature_importances_ gives one number per feature - higher means the
+# model relied on it more heavily to make correct splits. These numbers
+# sum to 1.0 across all features, so think of each as "% of decision-making
+# power" this feature contributed.
+importances = rf_model.feature_importances_
+
+importance_df = pd.DataFrame({
+    "feature": feature_names,
+    "importance": importances
+}).sort_values("importance", ascending=False)
+
+print("=== FEATURE IMPORTANCE RANKING (from Random Forest, all 40 features) ===")
+print(importance_df.to_string(index=False))
+print()
+
+# Rebuild using only the top N features and compare against the full model.
+# Try changing TOP_N to experiment further (e.g. 5, 15, 20).
+TOP_N = 10
+top_features = importance_df.head(TOP_N)["feature"].tolist()
+print(f"Top {TOP_N} features selected:", top_features, "\n")
+
+X_top = X[top_features]
+X_top_scaled = StandardScaler().fit_transform(X_top)
+
+X_train_top, X_test_top, y_train_top, y_test_top = train_test_split(
+    X_top_scaled, y, test_size=0.2, random_state=42, stratify=y
+)
+
+top_model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+top_model.fit(X_train_top, y_train_top)
+top_pred = top_model.predict(X_test_top)
+results.append(evaluate_model(f"Random Forest (top {TOP_N} features only)", y_test_top, top_pred))
+
+# ---------------------------------------------------------------------------
 # 4. MODEL 3: ISOLATION FOREST (unsupervised - doesn't use y_train at all!)
 # ---------------------------------------------------------------------------
 # contamination=0.46 tells the model roughly what % of the data we EXPECT
@@ -163,6 +208,14 @@ print(results_df.to_string(index=False))
 # though, since new/unknown attack types won't have labeled training
 # examples yet, and only an unsupervised approach could catch them."
 #
-# NEXT STEP: 05_scoring_tool.py - build a script/tool that takes a CSV of
-# new, unlabeled traffic and prints out which rows look suspicious using
-# our best-performing trained model.
+# - Compare the "Random Forest" row against the "Random Forest (top N
+#   features only)" row in the final table. If they're close, that's a
+#   genuinely useful finding: most of the 40 original columns aren't
+#   pulling their weight, and a simpler, faster model using only the top
+#   features achieves nearly the same result.
+#
+# TALKING POINT FOR YOUR README/INTERVIEW:
+# "Using Random Forest's feature importance, I found that a much smaller
+# subset of features achieved comparable performance to the full feature
+# set, which suggests [whatever your top features turn out to be] are the
+# strongest indicators of malicious traffic in this dataset."
