@@ -5,11 +5,18 @@ Goal of this file: this is the actual "product" - a tool that trains once
 on known, labeled data, then can score ANY new CSV of traffic and tell you
 which rows look suspicious. This is what you'd demo in an interview.
 
+UPDATED: now uses sample_weight (based on detailed attack sub-type) when
+training, the same fix validated in 07_test_generalization.py. This
+meaningfully improves the model's ability to catch RARE-but-previously-seen
+attack types like guess_passwd, which the original unweighted version
+almost completely missed.
+
 How to use it:
     python 05_scoring_tool.py KDDTest+.txt
 
 It will:
-1. Train the Random Forest model on KDDTrain+.txt (our known, labeled data)
+1. Train the Random Forest model on KDDTrain+.txt (our known, labeled data),
+   using sample_weight to address class imbalance between attack sub-types
 2. Load whatever file you passed in as the second argument (new traffic)
 3. Print out which rows it thinks are suspicious, with a confidence score
 
@@ -21,6 +28,7 @@ import sys
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils.class_weight import compute_sample_weight
 
 # ---------------------------------------------------------------------------
 # COLUMN NAMES (same as every previous file - NSL-KDD has no header row)
@@ -49,6 +57,13 @@ column_names = [
 def train_model():
     df = pd.read_csv("KDDTrain+.txt", header=None, names=column_names)
     df["binary_label"] = df["label"].apply(lambda x: "normal" if x == "normal" else "attack")
+
+    # Keep the ORIGINAL detailed attack-type labels (neptune, guess_passwd,
+    # etc.) before we drop them. We discovered in 07_test_generalization.py
+    # that this level of detail is needed to properly address class
+    # imbalance - the collapsed binary label alone hides it.
+    detailed_labels = df["label"]
+
     df = df.drop(columns=["label", "difficulty"])
 
     # We need to save the encoders and scaler because we'll have to apply
@@ -67,10 +82,18 @@ def train_model():
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
-    model.fit(X_scaled, y)
+    # Compute a weight PER ROW based on how rare its detailed attack type
+    # is (e.g. guess_passwd rows get weighted much higher than neptune
+    # rows). This is the fix we proved works in 07_test_generalization.py -
+    # it improved recall on truly unseen data from 61.5% to 74.9% by
+    # forcing the model to pay real attention to rare-but-present attack
+    # types instead of mostly learning the handful of high-volume ones.
+    sample_weights = compute_sample_weight(class_weight="balanced", y=detailed_labels)
 
-    print("Model trained on", len(df), "labeled rows.\n")
+    model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+    model.fit(X_scaled, y, sample_weight=sample_weights)
+
+    print("Model trained on", len(df), "labeled rows (using sample_weight to address class imbalance).\n")
 
     # Return everything we'll need to process new data later
     return model, encoders, scaler, list(X.columns)
