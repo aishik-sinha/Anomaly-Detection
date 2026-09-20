@@ -4,42 +4,20 @@ STEP 2: Preprocess the Data (Encode + Scale + Split)
 Goal of this file: take the raw loaded data from step 1 and turn it into
 something a machine learning model can actually use.
 
-Models only understand numbers. Right now we have 3 columns that are text
-(protocol_type, service, flag) and features on wildly different scales
-(some range 0-3, others range into the millions). This file fixes both.
+REFACTORED: now uses the shared preprocessing.py module instead of
+repeating the loading/encoding/scaling logic here.
 
 Run this with: python 02_preprocess.py
 (Make sure KDDTrain+.txt is in the same folder, same as step 1)
 """
 
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
+from preprocessing import load_and_clean, encode_features, scale_features
 
 # ---------------------------------------------------------------------------
-# 1. LOAD THE DATA (same as step 1)
+# 1. LOAD THE DATA
 # ---------------------------------------------------------------------------
-column_names = [
-    "duration", "protocol_type", "service", "flag", "src_bytes", "dst_bytes",
-    "land", "wrong_fragment", "urgent", "hot", "num_failed_logins",
-    "logged_in", "num_compromised", "root_shell", "su_attempted",
-    "num_root", "num_file_creations", "num_shells", "num_access_files",
-    "num_outbound_cmds", "is_host_login", "is_guest_login", "count",
-    "srv_count", "serror_rate", "srv_serror_rate", "rerror_rate",
-    "srv_rerror_rate", "same_srv_rate", "diff_srv_rate",
-    "srv_diff_host_rate", "dst_host_count", "dst_host_srv_count",
-    "dst_host_same_srv_rate", "dst_host_diff_srv_rate",
-    "dst_host_same_src_port_rate", "dst_host_srv_diff_host_rate",
-    "dst_host_serror_rate", "dst_host_srv_serror_rate",
-    "dst_host_rerror_rate", "dst_host_srv_rerror_rate",
-    "label", "difficulty"
-]
-
-df = pd.read_csv("KDDTrain+.txt", header=None, names=column_names)
-
-# Create the simplified binary label again (normal vs attack) - same as step 1
-df["binary_label"] = df["label"].apply(lambda x: "normal" if x == "normal" else "attack")
-
+df = load_and_clean("KDDTrain+.txt")
 print("Loaded data shape:", df.shape)
 
 # ---------------------------------------------------------------------------
@@ -54,17 +32,10 @@ df = df.drop(columns=["label", "difficulty"])
 # ---------------------------------------------------------------------------
 # 3. ENCODE THE TEXT COLUMNS INTO NUMBERS
 # ---------------------------------------------------------------------------
-# LabelEncoder assigns each unique text value a number, e.g.:
-#   "tcp" -> 0, "udp" -> 1, "icmp" -> 2
-# We do this separately for each text column because each has its own
-# set of unique values (protocol_type has 3 values, service has ~70).
-categorical_columns = ["protocol_type", "service", "flag"]
-
-encoders = {}  # we save each encoder in case we need to reverse it later
-for col in categorical_columns:
-    le = LabelEncoder()
-    df[col] = le.fit_transform(df[col])
-    encoders[col] = le
+# encode_features() converts protocol_type, service, and flag into numbers
+# (e.g. "tcp" -> 0, "udp" -> 1). Called with no `encoders` argument, this
+# FITS new encoders - appropriate here since this is our training data.
+df, encoders = encode_features(df)
 
 print("\nEncoded categorical columns. Example - protocol_type unique values now:")
 print(df["protocol_type"].unique())
@@ -80,16 +51,11 @@ y = df["binary_label"]
 # ---------------------------------------------------------------------------
 # 5. SCALE THE NUMERIC FEATURES
 # ---------------------------------------------------------------------------
-# Why: src_bytes might range into the tens of thousands, while
-# num_failed_logins ranges 0-5. Without scaling, the model would wrongly
-# think src_bytes matters way more just because its numbers are bigger.
-# StandardScaler converts every column to have mean=0, standard deviation=1,
-# putting all features on the same footing.
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-
-# X_scaled is now a plain numpy array (not a DataFrame) - that's normal,
-# scikit-learn models are fine working with either.
+# scale_features() puts every column on the same footing (mean=0, std=1),
+# so a large-range column like src_bytes doesn't dominate just because
+# its raw numbers are bigger. Called with no `scaler` argument, this FITS
+# a new scaler - appropriate here since this is training data.
+X_scaled, scaler = scale_features(X)
 
 print("\nFeatures scaled. Shape of feature matrix:", X_scaled.shape)
 

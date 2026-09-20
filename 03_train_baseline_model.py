@@ -6,55 +6,34 @@ Goal of this file: train our first real model and see how well it does.
 We're starting with a Decision Tree because it's simple to understand:
 it asks a series of yes/no questions about the data (e.g. "is serror_rate
 > 0.5? if yes, is count > 100?") and follows a branching path down to a
-final answer of "normal" or "attack". This makes it a good first model -
-you can even print out the actual questions it learned to ask.
+final answer of "normal" or "attack".
+
+REFACTORED: now uses the shared preprocessing.py module instead of
+repeating the loading/encoding/scaling logic here.
 
 Run this with: python 03_train_baseline_model.py
 (Make sure KDDTrain+.txt is in the same folder, same as steps 1 and 2)
 """
 
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report
 )
+from preprocessing import load_and_clean, encode_features, scale_features
 
 # ---------------------------------------------------------------------------
-# 1. LOAD AND PREPROCESS (same steps as files 1 and 2, combined)
+# 1. LOAD AND PREPROCESS
 # ---------------------------------------------------------------------------
-column_names = [
-    "duration", "protocol_type", "service", "flag", "src_bytes", "dst_bytes",
-    "land", "wrong_fragment", "urgent", "hot", "num_failed_logins",
-    "logged_in", "num_compromised", "root_shell", "su_attempted",
-    "num_root", "num_file_creations", "num_shells", "num_access_files",
-    "num_outbound_cmds", "is_host_login", "is_guest_login", "count",
-    "srv_count", "serror_rate", "srv_serror_rate", "rerror_rate",
-    "srv_rerror_rate", "same_srv_rate", "diff_srv_rate",
-    "srv_diff_host_rate", "dst_host_count", "dst_host_srv_count",
-    "dst_host_same_srv_rate", "dst_host_diff_srv_rate",
-    "dst_host_same_src_port_rate", "dst_host_srv_diff_host_rate",
-    "dst_host_serror_rate", "dst_host_srv_serror_rate",
-    "dst_host_rerror_rate", "dst_host_srv_rerror_rate",
-    "label", "difficulty"
-]
-
-df = pd.read_csv("KDDTrain+.txt", header=None, names=column_names)
-df["binary_label"] = df["label"].apply(lambda x: "normal" if x == "normal" else "attack")
+df = load_and_clean("KDDTrain+.txt")
 df = df.drop(columns=["label", "difficulty"])
-
-categorical_columns = ["protocol_type", "service", "flag"]
-for col in categorical_columns:
-    le = LabelEncoder()
-    df[col] = le.fit_transform(df[col])
+df, encoders = encode_features(df)
 
 X = df.drop(columns=["binary_label"])
 y = df["binary_label"]
 
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+X_scaled, scaler = scale_features(X)
 
 X_train, X_test, y_train, y_test = train_test_split(
     X_scaled, y, test_size=0.2, random_state=42, stratify=y
@@ -116,11 +95,6 @@ print(f"F1 Score:  {f1:.4f}  (balance of precision and recall)")
 # ---------------------------------------------------------------------------
 # 5. CONFUSION MATRIX - the full breakdown of right vs wrong predictions
 # ---------------------------------------------------------------------------
-# This shows four numbers:
-#   - True Negatives:  correctly predicted "normal"
-#   - False Positives: predicted "attack" but was actually "normal" (false alarm)
-#   - False Negatives: predicted "normal" but was actually "attack" (MISSED attack - the dangerous one)
-#   - True Positives:  correctly predicted "attack"
 cm = confusion_matrix(y_test, y_pred, labels=["normal", "attack"])
 print("\nConfusion Matrix:")
 print("                Predicted Normal   Predicted Attack")
@@ -139,11 +113,9 @@ print(classification_report(y_test, y_pred))
 # - A well-performing baseline on this dataset typically gets accuracy,
 #   precision, and recall all above 0.95 - NSL-KDD is a relatively "easy"
 #   dataset for models to do well on, which is part of why it's good for
-#   learning (and also a fair limitation to mention in your README - real
-#   world traffic is messier than this).
+#   learning (and also a fair limitation to mention in your README).
 # - Pay special attention to the "False Negatives" number in the confusion
-#   matrix (bottom-left) - these are real attacks the model MISSED. This
-#   is the number that matters most in a security context.
+#   matrix (bottom-left) - these are real attacks the model MISSED.
 #
 # NEXT STEP: in 04_compare_models.py, we'll train a Random Forest and an
 # Isolation Forest alongside this Decision Tree and compare all three.
