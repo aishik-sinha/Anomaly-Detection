@@ -16,10 +16,11 @@ This tool takes network connection records (things like connection duration, pro
 
 | Step | File | What it does |
 |---|---|---|
+| - | `preprocessing.py` | Shared module: column definitions, loading, encoding, and scaling - used by every script below |
 | 1 | `01_load_and_explore.py` | Load the raw data, inspect structure, create a simplified binary (normal/attack) label |
 | 2 | `02_preprocess.py` | Encode categorical features, scale numeric features, split into train/test |
 | 3 | `03_train_baseline_model.py` | Train a Decision Tree baseline, evaluate with precision/recall/F1 |
-| 4 | `04_compare_models.py` | Compare Decision Tree, Random Forest, and Isolation Forest; rank features by importance |
+| 4 | `04_compare_models.py` | Compare Decision Tree, Random Forest, and Isolation Forest; rank features by importance; saves chart images |
 | 5 | `05_scoring_tool.py` | Command-line tool: train once, then score any new CSV of connection data |
 | 7 | `07_test_generalization.py` | Test on NSL-KDD's separate held-out file to check real-world generalization |
 
@@ -52,24 +53,34 @@ My first model scored **99.8% accuracy** on a standard random 80/20 train/test s
 | Decision Tree | 0.997 | 0.997 | 0.997 | 0.997 |
 | Random Forest | 0.998 | 0.999 | 0.997 | 0.998 |
 | Random Forest (top 10 features only) | 0.998 | 0.999 | 0.996 | 0.998 |
-| Isolation Forest (unsupervised) | 0.648 | 0.622 | 0.621 | 0.621 |
+| Isolation Forest (unsupervised, `contamination='auto'`) | 0.569 | 0.670 | 0.145 | 0.238 |
 
 *(All same-file split results above; see the generalization findings for held-out performance.)*
 
-Isolation Forest performs notably worse because it's unsupervised - it never sees labels during training and instead flags statistical outliers. This is a real tradeoff: lower accuracy, but it's the only approach here that could plausibly catch a brand-new attack type with zero labeled examples, since it doesn't rely on having seen something like it before.
+![Model comparison by F1 score](model_comparison_f1.png)
+
+**A data leakage bug I found and fixed:** the Isolation Forest above originally scored much higher (F1 0.621) by passing `contamination` as the *true* attack ratio computed directly from the training labels. That's a subtle form of leakage - a genuinely unsupervised setup wouldn't have access to the real anomaly rate in advance; that's the entire premise of not having labels. Switching to scikit-learn's default (`contamination='auto'`) dropped F1 to 0.238, which is the honest number. I'm noting this explicitly because catching data leakage is arguably as important a skill here as building the model in the first place.
+
+Isolation Forest still performs worse than the supervised models, which is expected - it never sees labels during training and instead flags statistical outliers. The real tradeoff: lower accuracy, but it's the only approach here that could plausibly catch a brand-new attack type with zero labeled examples.
+
+| Decision Tree | Random Forest | Isolation Forest |
+|---|---|---|
+| ![Decision Tree confusion matrix](confusion_matrix_decision_tree.png) | ![Random Forest confusion matrix](confusion_matrix_random_forest.png) | ![Isolation Forest confusion matrix](confusion_matrix_isolation_forest.png) |
 
 ## Feature importance
 
 Using the Random Forest's built-in feature importance ranking, the strongest predictors were `src_bytes`, `dst_bytes`, `same_srv_rate`, `dst_host_srv_count`, and `serror_rate`/`srv_serror_rate` - broadly, data volume and connection-error patterns. A model using only the top 10 of 40 features achieved nearly identical performance to the full feature set, suggesting most connection-level signal is concentrated in a small subset of features.
 
+![Top 15 feature importances](feature_importance.png)
+
 ## Tech stack
 
-Python, pandas, scikit-learn (Decision Tree, Random Forest, Isolation Forest, preprocessing, evaluation metrics)
+Python, pandas, scikit-learn (Decision Tree, Random Forest, Isolation Forest, preprocessing, evaluation metrics), matplotlib/seaborn (visualizations)
 
 ## How to run this
 
 1. Download `KDDTrain+.txt` and `KDDTest+.txt` from [Kaggle](https://www.kaggle.com/datasets/harivmv/nsl-kdd-dataset) or the [NSL-KDD GitHub mirror](https://github.com/jmnwong/NSL-KDD-Dataset), place them in this folder
-2. `pip install pandas scikit-learn`
+2. `pip install -r requirements.txt`
 3. Run the scripts in order: `python 01_load_and_explore.py`, then `02_preprocess.py`, `03_train_baseline_model.py`, `04_compare_models.py`
 4. To score new data: `python 05_scoring_tool.py <path_to_csv>`
 5. To test generalization on the held-out set: `python 07_test_generalization.py`
@@ -78,5 +89,6 @@ Python, pandas, scikit-learn (Decision Tree, Random Forest, Isolation Forest, pr
 
 - Extend `sample_weight` to the scoring tool's Isolation Forest path, and re-test whether unsupervised detection helps specifically on the attack types the supervised model still misses
 - Try multi-class prediction (attack category or specific type, not just binary) - this would let importance-based class balancing work at the level where the imbalance actually lives
+- Add cross-validation instead of a single train/test split, for a more statistically rigorous evaluation
 - Validate against a more modern dataset (e.g. CICIDS2017) to check whether these findings hold up outside 1998-era attack patterns
 - Add a lightweight web interface (Streamlit) for a more visual demo
