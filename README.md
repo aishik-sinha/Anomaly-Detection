@@ -1,94 +1,99 @@
-# Network Intrusion Detection with Machine Learning
+# Network Intrusion Detection on NSL-KDD
 
-A machine learning pipeline that analyzes network connection data and flags suspicious connections that may represent cyberattacks - built as a portfolio project combining data science and cybersecurity.
+A Python project that classifies network connection records as normal traffic or an attack. I built it as a portfolio project for my computer science and data science degree, where I'm focusing on cybersecurity.
 
-## What this project does
+## Overview
 
-This tool takes network connection records (things like connection duration, protocol type, bytes transferred, and failed login attempts) and classifies each one as either **normal** traffic or a likely **attack**. It's a decision-support tool: it flags suspicious connections for a security analyst to review, rather than automatically blocking traffic itself.
+Each row in the dataset describes one network connection: how long it lasted, which protocol it used, how many bytes moved each way, how many errors or failed logins occurred, and so on. The model reads those fields and predicts whether the connection looks like an attack. The idea is to flag connections for a person to review, not to block anything automatically. It works on logged data in a CSV file, not on live traffic.
 
 ## Dataset
 
-[NSL-KDD](https://www.unb.ca/cic/datasets/nsl.html), a widely-used benchmark dataset for intrusion detection research. It's derived from network traffic captured during a 1998 DARPA intrusion detection evaluation, and includes 41 features per connection record across both normal traffic and ~22 specific attack types (grouped into 4 broader categories: DoS, Probe, R2L, and U2R).
+NSL-KDD is a cleaned-up version of the KDD Cup 99 data, which came from a 1998 DARPA intrusion detection evaluation. Each record has 41 features, and the training file contains about 22 attack types from four families (DoS, probe, R2L and U2R).
 
-**Known limitation:** this dataset is from 1998. Attack patterns in it are more distinct and "obvious" than what a modern, real-world intrusion detection system would face. I address this limitation directly in the findings below.
+The training file has 125,973 rows. The separate test file has 22,544 rows and includes 17 attack types that never appear in training.
 
-## Pipeline
+The data is old, and its attacks are easier to tell apart from normal traffic than most modern ones. The results below say something about this dataset and should not be read as how the model would do on a real network today.
 
-| Step | File | What it does |
-|---|---|---|
-| - | `preprocessing.py` | Shared module: column definitions, loading, encoding, and scaling - used by every script below |
-| 1 | `01_load_and_explore.py` | Load the raw data, inspect structure, create a simplified binary (normal/attack) label |
-| 2 | `02_preprocess.py` | Encode categorical features, scale numeric features, split into train/test |
-| 3 | `03_train_baseline_model.py` | Train a Decision Tree baseline, evaluate with precision/recall/F1 |
-| 4 | `04_compare_models.py` | Compare Decision Tree, Random Forest, and Isolation Forest; rank features by importance; saves chart images |
-| 5 | `05_scoring_tool.py` | Command-line tool: train once, then score any new CSV of connection data |
-| 7 | `07_test_generalization.py` | Test on NSL-KDD's separate held-out file to check real-world generalization |
+## Files
 
-## Key finding: the accuracy trap, and how I diagnosed it
+| File | What it does |
+|---|---|
+| `preprocessing.py` | Shared functions for loading, encoding and scaling, used by every script below |
+| `01_load_and_explore.py` | Loads the data and prints its shape, column types and label counts |
+| `02_preprocess.py` | Encodes the text columns, scales the numeric ones and makes a train/test split |
+| `03_train_baseline_model.py` | Trains a decision tree baseline |
+| `04_compare_models.py` | Compares a decision tree, a random forest and an isolation forest, ranks features and saves the charts |
+| `05_scoring_tool.py` | Trains a model, then scores any new CSV from the command line |
+| `07_test_generalization.py` | Trains on the training file and tests on the separate test file |
 
-My first model scored **99.8% accuracy** on a standard random 80/20 train/test split. That number is misleading, and figuring out why was the most important part of this project.
+There is no `06`. That script was merged into `04`.
 
-**The problem:** an 80/20 split still pulls both sets from the *same file*, so it mainly tests whether the model memorized individual rows - not whether it generalizes to genuinely new data. NSL-KDD ships with a second, independently-collected file (`KDDTest+.txt`) specifically for testing this, including several attack sub-types that never appear in the training file at all.
+## Testing on the separate file
 
-**Testing on that real held-out file, accuracy dropped to 76.9% and recall fell to 61.5%** - meaning the model was missing nearly 40% of real attacks on genuinely new data.
+My first models scored about 99.8% on a random 80/20 split of the training file. Those test rows come from the same file the model learned from, so the score says little about new data. NSL-KDD includes a second file, `KDDTest+.txt`, that was collected separately. I trained on the full training file and tested on that one instead.
 
-**Diagnosis:** breaking results down by specific attack type revealed the model had essentially only learned to recognize the handful of *high-volume* attack types in training (`neptune`: 41,214 examples) while almost completely failing on rare ones (`guess_passwd`: 53 examples, 0% catch rate) - a classic class imbalance problem, hidden by the fact that all attack sub-types get collapsed into one binary "attack" label.
+Accuracy dropped to 76.9% and recall to 61.5%, which means roughly four in ten real attacks were missed.
 
-**First fix attempt - `class_weight='balanced'` - failed.** This only balances the binary normal/attack label, which was already roughly 54/46. It had no visibility into the real imbalance, which existed one level deeper, between individual attack sub-types.
+Breaking the results down by attack type showed where the misses were. The model caught the attacks that are common in training almost every time (`neptune` has 41,214 training rows) and missed most of the rare ones. `guess_passwd` has only 53 training rows, and the model caught none of its 1,231 rows in the test file.
 
-**Working fix - `sample_weight` computed from the original detailed attack labels.** By weighting each training row based on the rarity of its *specific* attack sub-type (not the collapsed binary label), the model was forced to pay real attention to rare-but-present attack types. This improved recall on the held-out set from **61.5% to 74.9%**, and moved `guess_passwd`'s catch rate from 0% to 28.9%.
+## Fixing the class imbalance
+
+My first fix was `class_weight='balanced'` on the random forest. It didn't help, and recall slipped to 60.3%. I was training on a binary label (normal or attack), which is already split about 54/46, so there was almost nothing for it to balance. The imbalance sits between attack types inside the attack class, and the binary label hides it.
+
+The second fix worked. I kept the binary target but computed a weight for each training row from its original attack type, so rows from rare attacks count for more during training. Recall on the test file rose to 74.9%, and `guess_passwd` went from a 0% catch rate to 28.9%.
 
 | Approach | Accuracy | Recall | F1 |
 |---|---|---|---|
-| No balancing | 0.769 | 0.615 | 0.752 |
-| `class_weight='balanced'` (binary label) | 0.762 | 0.603 | 0.743 |
-| `sample_weight` (detailed attack labels) | **0.828** | **0.749** | **0.832** |
+| No weighting | 0.769 | 0.615 | 0.752 |
+| `class_weight='balanced'` on the binary label | 0.762 | 0.603 | 0.743 |
+| Per-row weights from the detailed attack type | 0.828 | 0.749 | 0.832 |
 
-**Remaining limitation:** attack types absent from training entirely (17 of them appear only in the test file) still can't be reliably caught. No amount of reweighting can teach a model to recognize a pattern it has zero examples of - this is a fundamental limit of supervised learning, not a bug in this implementation.
+Attack types missing from training are still mostly undetected (`apache2`, `mailbomb` and `snmpguess` are near 0%). Reweighting can't help with a class the model has never seen.
 
-## Model comparison
+## Comparing models
+
+These scores come from the random split of the training file, so they look much better than the results on the separate test file above.
 
 | Model | Accuracy | Precision | Recall | F1 |
 |---|---|---|---|---|
-| Decision Tree | 0.997 | 0.997 | 0.997 | 0.997 |
-| Random Forest | 0.998 | 0.999 | 0.997 | 0.998 |
-| Random Forest (top 10 features only) | 0.998 | 0.999 | 0.996 | 0.998 |
-| Isolation Forest (unsupervised, `contamination='auto'`) | 0.569 | 0.670 | 0.145 | 0.238 |
-
-*(All same-file split results above; see the generalization findings for held-out performance.)*
+| Decision tree | 0.997 | 0.997 | 0.997 | 0.997 |
+| Random forest | 0.998 | 0.999 | 0.997 | 0.998 |
+| Random forest, top 10 features only | 0.998 | 0.999 | 0.996 | 0.998 |
+| Isolation forest (`contamination='auto'`) | 0.569 | 0.670 | 0.145 | 0.238 |
 
 ![Model comparison by F1 score](model_comparison_f1.png)
 
-**A data leakage bug I found and fixed:** the Isolation Forest above originally scored much higher (F1 0.621) by passing `contamination` as the *true* attack ratio computed directly from the training labels. That's a subtle form of leakage - a genuinely unsupervised setup wouldn't have access to the real anomaly rate in advance; that's the entire premise of not having labels. Switching to scikit-learn's default (`contamination='auto'`) dropped F1 to 0.238, which is the honest number. I'm noting this explicitly because catching data leakage is arguably as important a skill here as building the model in the first place.
-
-Isolation Forest still performs worse than the supervised models, which is expected - it never sees labels during training and instead flags statistical outliers. The real tradeoff: lower accuracy, but it's the only approach here that could plausibly catch a brand-new attack type with zero labeled examples.
-
-| Decision Tree | Random Forest | Isolation Forest |
+| Decision tree | Random forest | Isolation forest |
 |---|---|---|
-| ![Decision Tree confusion matrix](confusion_matrix_decision_tree.png) | ![Random Forest confusion matrix](confusion_matrix_random_forest.png) | ![Isolation Forest confusion matrix](confusion_matrix_isolation_forest.png) |
+| ![Decision tree confusion matrix](confusion_matrix_decision_tree.png) | ![Random forest confusion matrix](confusion_matrix_random_forest.png) | ![Isolation forest confusion matrix](confusion_matrix_isolation_forest.png) |
+
+## Isolation forest and a leakage mistake
+
+In my first version I set the isolation forest's `contamination` to the true share of attacks in the training labels. That gave a model that is supposed to be unsupervised a piece of information it wouldn't have in practice, and it pushed the F1 up to 0.621. With `contamination='auto'` the F1 is 0.238. I changed the code and kept the lower number.
+
+The isolation forest is still far behind the supervised models here. Its appeal is that it doesn't need labels, so in principle it could flag an attack type nobody has labeled yet. I haven't tested that.
 
 ## Feature importance
 
-Using the Random Forest's built-in feature importance ranking, the strongest predictors were `src_bytes`, `dst_bytes`, `same_srv_rate`, `dst_host_srv_count`, and `serror_rate`/`srv_serror_rate` - broadly, data volume and connection-error patterns. A model using only the top 10 of 40 features achieved nearly identical performance to the full feature set, suggesting most connection-level signal is concentrated in a small subset of features.
+The random forest's own importance scores put `src_bytes`, `dst_bytes`, `same_srv_rate`, `dst_host_srv_count` and the SYN error rates (`serror_rate`, `srv_serror_rate`) near the top. A model trained on only the top 10 of the 40 features scored almost the same as the full model.
 
 ![Top 15 feature importances](feature_importance.png)
 
-## Tech stack
+## Running it
 
-Python, pandas, scikit-learn (Decision Tree, Random Forest, Isolation Forest, preprocessing, evaluation metrics), matplotlib/seaborn (visualizations)
+1. Download `KDDTrain+.txt` and `KDDTest+.txt` from [Kaggle](https://www.kaggle.com/datasets/harivmv/nsl-kdd-dataset) or the [GitHub mirror](https://github.com/jmnwong/NSL-KDD-Dataset) and put them in the project folder.
+2. Install the libraries with `pip install -r requirements.txt`.
+3. Run `01_load_and_explore.py` through `04_compare_models.py` in order.
+4. Score a CSV with `python 05_scoring_tool.py <path_to_csv>`.
+5. Run the separate-file test with `python 07_test_generalization.py`.
 
-## How to run this
+The code uses pandas and scikit-learn, with matplotlib and seaborn for the charts.
 
-1. Download `KDDTrain+.txt` and `KDDTest+.txt` from [Kaggle](https://www.kaggle.com/datasets/harivmv/nsl-kdd-dataset) or the [NSL-KDD GitHub mirror](https://github.com/jmnwong/NSL-KDD-Dataset), place them in this folder
-2. `pip install -r requirements.txt`
-3. Run the scripts in order: `python 01_load_and_explore.py`, then `02_preprocess.py`, `03_train_baseline_model.py`, `04_compare_models.py`
-4. To score new data: `python 05_scoring_tool.py <path_to_csv>`
-5. To test generalization on the held-out set: `python 07_test_generalization.py`
+## Limitations and next steps
 
-## What I'd improve with more time
-
-- Extend `sample_weight` to the scoring tool's Isolation Forest path, and re-test whether unsupervised detection helps specifically on the attack types the supervised model still misses
-- Try multi-class prediction (attack category or specific type, not just binary) - this would let importance-based class balancing work at the level where the imbalance actually lives
-- Add cross-validation instead of a single train/test split, for a more statistically rigorous evaluation
-- Validate against a more modern dataset (e.g. CICIDS2017) to check whether these findings hold up outside 1998-era attack patterns
-- Add a lightweight web interface (Streamlit) for a more visual demo
+- Everything is evaluated on one train/test split and one test file. Cross-validation would give a firmer picture.
+- The settings (100 trees, max depth 10) were picked by hand and never tuned.
+- The model only predicts normal or attack. Predicting the attack type is the obvious next experiment.
+- It only uses NSL-KDD. Trying a newer dataset such as CICIDS2017 would show whether these findings hold up.
+- I haven't checked whether the isolation forest catches any of the attack types the supervised model misses.
+- There are no automated tests and no web interface yet.
