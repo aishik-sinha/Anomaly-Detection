@@ -219,3 +219,7 @@ __marimo__/
 Archive.zip
 *.zip
 .DS_Store
+Archive.zip
+*.zip
+__pycache__/
+.DS_Store
